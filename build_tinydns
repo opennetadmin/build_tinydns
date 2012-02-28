@@ -1,0 +1,352 @@
+#!/bin/bash
+#
+# build_tinydns -- v1.0
+#
+# Written by: Matt Pascoe <matt@opennetadmin.com>
+#
+# License:
+#  build_tinydns (hereafter referred to as "program") is free software;
+#  you can redistribute it and/or modify it under the terms of the GNU General
+#  Public License as published by the Free Software Foundation; either version
+#  2 of the License, or (at your option) any later version.
+#  Note that when redistributing modified versions of this source code, you
+#  must ensure that this disclaimer and the above coder's names are included
+#  VERBATIM in the modified code.
+# 
+# Disclaimer:
+#  This program is provided with no warranty of any kind, either expressed or
+#  implied.  It is the responsibility of the user (you) to fully research and
+#  comprehend the usage of this program.  As with any tool, it can be misused,
+#  either intentionally (you're a vandal) or unintentionally (you're a moron).
+#  THE AUTHOR(S) IS(ARE) NOT RESPONSIBLE FOR ANYTHING YOU DO WITH THIS PROGRAM
+#  or anything that happens because of your use (or misuse) of this program,
+#  including but not limited to anything you, your lawyers, or anyone else
+#  can dream up.  And now, a relevant quote directly from the GPL:
+# 
+# NO WARRANTY
+# 
+#  11. BECAUSE THE PROGRAM IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+#  FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT WHEN
+#  OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
+#  PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED
+#  OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+#  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.  THE ENTIRE RISK AS
+#  TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU.  SHOULD THE
+#  PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING,
+#  REPAIR OR CORRECTION.
+# 
+# The GNU GPL can be found at http://www.fsf.org/copyleft/gpl.html
+# 
+# -----------------------------------------------------------------------
+# Description
+# Subversion info: $Id 
+#
+#
+# THIS IS A REFERENCE DESIGN BUILD SCRIPT, IT WORKS FOR ME BUT MAY NOT FOR YOU
+# IT IS INTENDED TO GIVE AN EXAMPLE OF HOW A SCRIPT LIKE THIS COULD BE BUILT.  IF IT WORKS
+# FOR YOU, GREAT!  IF NOT THEN MAKE WHATEVER ADJUSTMENTS TO IT YOU NEED TO GET IT WORKING!
+# ASK FOR HELP IN THE FORUMS IF NEEDED.
+#
+# REQUIRES: dcm.pl, build_tinydns_conf module, working tinydns installation, sendEmail
+#
+# dcm.pl should be working on your system and either in your path or you will need to put the full path to it in the DCM_PATH variable below.
+#
+# Remember that the checks done by tinydns are only syntax checks.  They will not ensure that the content of your files are correct.
+# If you have missing records or incorrect data it could impact your environment or the functionality of other domain servers.
+#
+# You can use this script to extract and generate data files for a local tinydns server or as a central build only service
+# which then distributes configurations out to their respective servers.
+#
+# Configurations are generally stored in /opt/ona/etc/tinydns.  There will be a directory for each server FQDN that is used by script.
+# This is the path to where your tinydns data file will be and would be referenced or symlinked by your tinydns daemon configuration 'ROOT' setting.
+# by default we use the path /opt/ona/etc/tinydns to store directories for each server.
+# an example full path would be: /opt/ona/etc/tinydns/dns-server.example.com
+#
+# NOTE: You must manually create the SRV_FQDN directory, this script will not do it for you currently.
+# 
+# The basic flow is as follows:
+#  * Extract data from ONA database
+#  * Merge it with a local header file
+#  * Place the resulting data file into the path defined by the variables '$ONA_PATH/$SRV_FQDN/data'.
+#  * Execute the Makefile which will generate the data.cdb
+#  * The make file may or may not rsync the data.cdb file to other servers.
+#  
+#If you are building for a local tinydns server, you would configure it as normal and configure it so that the 'ROOT' variable
+#points to '$ONA_PATH/$SRV_FQDN/data.cdb'.
+#
+# The SRV_FQDN variable can be hard coded in this script, or passed using the -s option from the CLI.  This FQDN must match a valid server in ONA.
+# It must be the PRIMARY name, not an CNAME or alternate A record.
+#
+# For ease of use, it is recommended to add /opt/ona/bin to your $PATH environment variable
+#
+# You will need to execute the following dcm commands to automatically create the appropriate module entries (the install process should do this for you):
+#
+# dcm.pl -r add_module name=build_tinydns_conf desc="Build TinyDNS config file" file=build/build_tinydns.inc.php
+#
+# You must set up your tinydns server on your own before you use this script.  The assumption is that you have run something
+# similar to the following command to set up the tinydns environment under the ONA directory structure:
+#
+#    tinydns-conf tinydns multilog /opt/ona/etc/tinydns x.x.x.x
+#
+# In the event that you are unable to manage certain data types or records in ONA you can still place them in the file
+# called 'data.ona.header' located in the directory for your server FQDN.  This file will get merged 
+# together with the data from ONA to create your configuration.  
+#
+# This script uses the standard tinydns make file process to rebuild the data file.  You should continue to use
+# that makefile to do things like rsync or scp the data file to other servers etc.
+#
+# NOTE: Good information about tinydns can be found here: http://www.thedjbway.org or http://www.djbdnsrocks.org
+# NOTE: This script was developed and tested on an ubuntu box.  Your mileage may vary on other distros.
+# NOTE: To view example configs in the GUI you need to set build_dns_type to "tinydns" in the sys_config table
+# NOTE: Another ubuntu related install for tinydns: http://www.howtoforge.com/perfect-djbdns-setup-on-ubuntu8.04-amd64
+#
+# Batch mode [-b] is used to remotely execute this script and return a SUCCESS or FAILURE message only.  This can be
+# used by an ssh key execution for example.
+#
+# The server directory ($ONA_PATH) is used to store tinydns configuration data files for the server
+# having the same name as the direcotry.
+# 
+# As stated above, you will need to make the directory for each server FQDN you plan to build for.  You should then
+# place a Makefile for this script to execute.  It can be a stock tinydns makefile or you can use the following as your Makefile:
+# 
+################################################################################################################################
+#  # The DIRNAME variable gets the directory name that this makefile is in.
+#  # The name of the directory must be the FQDN of the server to send the data.cdb file to
+#  # This is done because the build_tinydns script invokes make with --directory
+#  DIRNAME = $(shell basename ${CURDIR})
+#
+#  # Also the ssh keys should be stored in this directory as well under .ssh/id_dsa or similar.
+#
+#  # Copy the data to remote machine(s), this will also activate it on that remote server
+#  remote: data.cdb
+#          @echo "INFO => Rsyncing data to remote host: ${DIRNAME}"
+#          @rsync --timeout=5 -az -e "ssh -p 2222 -i ${CURDIR}/.ssh/id_dsa" data.cdb rsyncuser@${DIRNAME}:/service/tinydns/root/data.cdb
+#  #       ssh -i ${CURDIR}/.ssh/id_dsa rsyncuser@${DIRNAME} 'svc -t /service/dnscache'
+#
+#  # Convert data file to the .cdb form
+#  # This should be the path to your systems tinydns-data program
+#  data.cdb: data
+#          @/usr/local/bin/tinydns-data
+#
+#  # If there is no header file, lets initialize one
+#  init-header:
+#          @echo "############# BEGIN HEADER FILE ####################"  > data.ona.header
+#          @echo "# Header information to be added to the data file"    >> data.ona.header
+#          @echo "# This is where you manage records that can not be"   >> data.ona.header
+#          @echo "# maintained in the ONA database for whatever reason" >> data.ona.header
+#          @echo "# This information is specific to THIS server only"   >> data.ona.header
+#          @echo "############# PUT YOUR DATA HERE ###################" >> data.ona.header
+#          @echo "" >> data.ona.header
+#          @echo "############## END HEADER FILE #####################" >> data.ona.header
+################################################################################################################################
+#
+# In a functioning build server you should find the following files:
+# 
+# Makefile        - Your typical tinydns make file, a few enhancements are made to make things more automatic.  It
+#                   may also move the data.cdb file to a remote server via rsync or other similar process.
+# data.ona.header - A local, server specific file to manage non standard records that ONA can't handle.  It will
+#                   be included in the final data file automatically by the build script.
+#                   You can use the command 'make init-header' to generate a default header file.
+# data.ona.<TIME> - This is a temporary build file, if you see this you have either ran the -d option or a failure
+#                   has happend during that build cycle.  You can examine this file for any errors.  The build_tinydns
+#                   script will automatically clean up old versions of these files past the (default) 30 days.
+# data            - This is the final file that is built by the build_tinydns script.  It is the header and the ONA
+#                   extracted data merged into one file to be processed using 'make'.
+# data.cdb        - The tinydns-conf generated file that has processed the data file built previously.  The build_tinydns
+#                   script generates the data file then executes 'make' in this directory to build the final data.cdb.
+#                   This data.cdb file would then be loaded into the daemon or moved to the remote server as defined
+#                   in the Makefile
+# -----------------------------------------------------------------------
+[ ! -r /etc/onabase ] && echo "[$0] ERROR: Unable to read /etc/onabase." && exit 1
+ONABASE=`cat /etc/onabase`
+
+# This is the base path for storing tinydns configuration files generated from ONA.
+# There will be a directory for each server FQDN that is built using this script.
+# This is the path to where your tinydns data file will be and would be referenced
+# or symlinked by your tinydns daemon configuration 'ROOT' setting.
+# by default we use the path /opt/ona/etc/tinydns to store directories for each server.
+# an example full path would be: /opt/ona/etc/tinydns/dns-server.example.com
+ONA_PATH="${ONABASE}/etc/tinydns"
+
+# Get the local hosts FQDN.  It will be an assumption!! that it is the same as the hostname in ONA
+# Also, the use of hostname -f can vary from system type to system type.  be aware!
+# This is a default value only, you can specify the server name using the -s switch.
+#SRV_FQDN=`hostname -f`
+
+# Path to the dcm.pl command.  Also include any options that might be needed
+DCM_PATH="${ONABASE}/bin/dcm.pl"
+
+# Remove the temporary configuration files that are older than $DAYSOLD.  This uses the find
+# command to remove anything older than this amount of days.  These are configs that had an
+# error for some reason.
+DAYSOLD=30
+
+# The path to the system init script that is responsible for restarting the service
+# also include the restart option to the init script that is appropriate for your system
+SYSTEMINIT="make"
+
+# Email settings for config_archive to send status information to (diffs etc)
+MAIL_SERVER=mx.example.com				# name or IP of the mail server to use
+MAIL_FROM=ona-build_tinydns@dnssrv.example.com   	# email address to use in the from field
+MAIL_TO=oncall@example.com             			# email address(es) to send our notifications to
+
+
+###################### No need to change anything below here ################################
+
+# This will log a message in a standardized way
+# Its job is simple.. take the message that was passed in and log it via some mechanism.
+# Currently, it echos to stdout and logs in syslog
+function ONA_LOG {
+    # Log it to the screen
+    [ $BATCHMODE ] || echo $(date +'%h %d %H:%M:%S') [ONA:$(basename $0)]: "$1"
+
+    # log it to syslog
+    logger -t [ONA:$(basename $0)] "$1"
+}
+
+# This function will exit with a status of 1 and if in batch mode, will print a success/fail message
+function ABEND {
+    [ $BATCHMODE ] && echo FAILURE
+
+    # quiet the make process
+    SHOWMAIL="-q"
+    [ $DEBUGON ] && SHOWMAIL=""
+
+    # send an email notification
+    sendEmail $SHOWMAIL -s $MAIL_SERVER -f $MAIL_FROM -t $MAIL_TO \
+              -u "[ONA:$(basename $0)] $SRV_FQDN: Failure during TinyDNS rebuild." \
+              -m "The TinyDNS server rebuild for '$SRV_FQDN' has encountered a failure during its last rebuild, please check the status of the server.  The last configuration file was left at this location: $ONA_PATH/data.ona.$TMSTAMP"
+    if [ $? -ne 0 ]
+    then
+        ONA_LOG "ERROR => There was an issue sending the notification email."
+    fi
+    exit 1
+}
+
+#### Print usage info
+function USAGE {
+cat <<-EOF
+
+Usage: `basename $0` [-b] [-d] [-p] [-t] [-v] [-s <SERVER_FQDN>]
+
+  -s:  The FQDN of the server to build a configuration for
+  -p:  When building, build PTR records for all subnets in the database
+  -t:  When building, build TXT records from notes associated with a host
+  -d:  Dry run mode, only builds the file, does not restart TinyDNS
+  -b:  Batch mode, execute this script and return a SUCCESS or FAILURE message only
+  -v:  Display more verbose debugging output
+
+Description:
+   This tool extracts data from the ONA database for the server name specified using
+the -s option.  If that is not provided, it will use the value set in the script for
+the SRV_FQDN variable.  The data will be written to the path specified in the ONA_PATH
+variable.  It will be in a directory named for the SRV_FQDN under a timestamped name.  
+You must manually create the directory in ONA_PATH for each server FQDN.
+Any data in the header file defined in the HEADER_PATH variable will be appended to 
+the top of what is extracted from the database.  You can use this to define records
+not managed by ONA.
+
+The -p option will generate PTR records for each subnet address in the database.  This
+is useful for doing dns lookups on base addresses like 10.1.1.0 to find out the name
+of that subnet as defined in ONA.
+
+The -t option will generate TXT records for any host that has a note defined at the host
+level in ONA.  This is a generic way to use DNS lookups to retrieve general information
+about a host.
+
+EOF
+}
+
+#### Process the commandline options
+while getopts "s:vbdpt" options; do
+  case "$options" in
+    b ) BATCHMODE=true;;
+    d ) DRYRUN=true;;
+    v ) DEBUGON=true;;
+    p ) BUILDSUBNETPTR=ptr_subnets;;
+    t ) BUILDTXT=txt_notes;;
+    s ) SRV_FQDN=$OPTARG;;
+    \? ) USAGE
+         exit 1;;
+    * ) USAGE
+         exit 1;;
+  esac
+done
+
+# Check that we have a server name
+if [ ! $SRV_FQDN ]
+then
+    ONA_LOG "ERROR => There was no server name defined in the script or via the -s option."
+    USAGE
+    exit 1
+fi
+
+# Append the SRV_FQDN to the ONA_PATH to get the full directory
+ONA_PATH="${ONA_PATH}/${SRV_FQDN}"
+
+# The header should contain things that are static and rarely change or are unsupported
+# by the ONA system in some way.  An example would be two different servers that service
+# an A record that has a different IP address depending on the server providing the answer.
+HEADER_PATH="${ONA_PATH}/data.ona.header"
+
+# Check that the directory exists and is writeable 
+if ! test -w $ONA_PATH
+then
+    ONA_LOG "ERROR => Unable to write to directory '$ONA_PATH', does it exist and are you executing as the proper user?"
+    ABEND
+fi
+
+[ $BATCHMODE ] || ONA_LOG "INFO => Building TinyDNS config for $SRV_FQDN..."
+
+# Get a timestamp to name our temp file with
+TMSTAMP=`date +%Y%m%d%H%M%S`
+
+# Build the conf file
+# Start with including the local header file
+if test -r $HEADER_PATH
+then
+    cp $HEADER_PATH $ONA_PATH/data.ona.$TMSTAMP
+fi
+
+# Get config from database and append it to our temp file
+[ $DEBUGON ] && echo "$DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT -> $ONA_PATH/data.ona.$TMSTAMP"
+if ! $DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT >> $ONA_PATH/data.ona.$TMSTAMP
+then
+    ONA_LOG "ERROR => Unable to build TinyDNS config file."
+    ABEND
+fi
+
+[ $DEBUGON ] && ONA_LOG "DEBUG => Testing new config files for SYNTAX only..."
+
+# quiet the make process
+SHOWMAKE="-s"
+[ $DEBUGON ] && SHOWMAKE=""
+
+# If this is a dry run mode, skip the rebuild step
+if [ $DRYRUN ]
+then
+    ONA_LOG "DEBUG => Dry-run mode: Building file named '$ONA_PATH/data.ona.$TMSTAMP'."
+    exit 0
+else
+    # Rebuild the config using standard Makefile method.. If there are any errors then tinydns-data should kick out an error
+    # if you do any sort of data copying using rsync etc it should go in your Makefile as usual
+    cp $ONA_PATH/data.ona.$TMSTAMP $ONA_PATH/data
+    $SYSTEMINIT --directory=$ONA_PATH $SHOWMAKE
+
+    # Print an error if the make process failed
+    if [ $? -gt 0 ]
+    then
+        ONA_LOG "ERROR => There was an issue with your datafile, please correct it.  Reverting to original configuration."
+        ABEND
+    else
+	# Remove the temp file
+        rm $ONA_PATH/data.ona.$TMSTAMP
+
+        # Clean up old,failed, configs (only good for the next 100 years or so!)
+        find $ONA_PATH/data.ona.20* -type f -mtime +$DAYSOLD -exec rm -f '{}' > /dev/null 2>&1 \;
+    fi
+fi
+
+[ $DEBUGON ] && ONA_LOG "DEBUG => Completed TinyDNS configuration extraction and daemon reload."
+[ $BATCHMODE ] && echo "SUCCESS"
+exit 0
