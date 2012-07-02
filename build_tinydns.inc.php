@@ -132,7 +132,7 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
                 // FIXME: this probably needs to be fixed so that /32 and maybe /31 subnets dont get processed
                 $iprev = ip_mangle($subnet['ip_addr'],'flip');
 
-                $arpatype = ( $subnet['ip_addr'] > '294967295' ? 'ip6' : 'in-addr');
+                $arpatype = ( $subnet['ip_addr'] > '4294967295' ? 'ip6' : 'in-addr');
 
                 //^fqdn:p:ttl:timestamp:lo  --- PTR record format
                 $text .= sprintf("^%s\n" ,"{$iprev}.{$arpatype}.arpa:{$subnet['name']}::");
