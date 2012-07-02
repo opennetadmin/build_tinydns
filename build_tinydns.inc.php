@@ -52,7 +52,7 @@ function build_tinydns_conf($options="") {
     global $conf, $self, $onadb;
 
     // Version - UPDATE on every edit!
-    $version = '1.01';
+    $version = '1.02';
 
     printmsg("DEBUG => build_tinydns_conf({$options}) called", 3);
 
@@ -132,8 +132,10 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
                 // FIXME: this probably needs to be fixed so that /32 and maybe /31 subnets dont get processed
                 $iprev = ip_mangle($subnet['ip_addr'],'flip');
 
+                $arpatype = ( $subnet['ip_addr'] > '294967295' ? 'ip6' : 'in-addr');
+
                 //^fqdn:p:ttl:timestamp:lo  --- PTR record format
-                $text .= sprintf("^%s\n" ,"{$iprev}.in-addr.arpa:{$subnet['name']}::");
+                $text .= sprintf("^%s\n" ,"{$iprev}.{$arpatype}.arpa:{$subnet['name']}::");
             }
 
             $text .= "# ---------------- END PTR records for all subnets ---------\n";
@@ -285,9 +287,19 @@ function process_domain($domainname="",$txtnotes='') {
                     if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
 
                     list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
+                    $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
                     $ipflip = ip_mangle($int['ip_addr'],'flip');
                     //^fqdn:p:ttl:timestamp:lo
-                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.in-addr.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
+                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
+            }
+
+            // See if this is a ipv6 record and convert the data
+            if (strpos($interface['ip_addr_text'],':')) {
+                $ipoct = '';
+                foreach (str_split(str_replace(':','',ip_mangle($interface['ip_addr'],'ipv6')),2) as $v6hex)  {
+                    $ipoct .= sprintf("\%03s",base_convert($v6hex,16,8));
+                }
+                $interface['ip_addr_text'] = '28:'.$ipoct;
             }
 
             // +fqdn:ip:ttl:timestamp:lo
@@ -304,9 +316,10 @@ function process_domain($domainname="",$txtnotes='') {
                     if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
 
                     list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
+                    $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
                     $ipflip = ip_mangle($int['ip_addr'],'flip');
                     //^fqdn:p:ttl:timestamp:lo
-                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.in-addr.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
+                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
                 }
             }
 
@@ -399,8 +412,10 @@ function process_domain($domainname="",$txtnotes='') {
             // flip the IP
             $iprev = ip_mangle($interface['ip_addr'],'flip');
 
+            $arpatype = (strpos($interface['ip_addr_text'],':') ? 'ip6' : 'in-addr');
+
             //^fqdn:p:ttl:timestamp:lo  --- PTR record format
-            $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$iprev}.in-addr.arpa:{$ptr['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
+            $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$iprev}.{$arpatype}.arpa:{$ptr['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
     }
