@@ -449,13 +449,13 @@ function process_domain($domainname='') {
             $fqdn = $dnsrecord['name'].$domain['fqdn'];
 
             $tar = "";
-            $chunks = explode(".", {$srv['name']}.{$srv['domain_fqdn']});
+            $chunks = explode(".", $srv['name'].".".$srv['domain_fqdn']);
             foreach ($chunks as $chunk) {
               $tar = $tar . characterCount( $chunk ) . $chunk;
             }
 
             // :sip.tcp.example.com:33:\000\001\000\002\023\304\003pbx\007example\003com\000:3600
-            $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$fqdn}:33:".escnum($pri).escnum($wei).escnum($port).$tar."\\000:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
+            $text .= sprintf(":%-{$datawidth}s%s\n" ,"{$fqdn}:33:".escnum($dnsrecord['srv_pri']).escnum($dnsrecord['srv_weight']).escnum($dnsrecord['srv_port']).$tar."\\000:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
     }

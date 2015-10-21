@@ -193,6 +193,7 @@ SYSTEMINIT="make"
 MAIL_SERVER=mx.example.com				# name or IP of the mail server to use
 MAIL_FROM=ona-build_tinydns@dnssrv.example.com   	# email address to use in the from field
 MAIL_TO=oncall@example.com             			# email address(es) to send our notifications to
+# leave MAIL_TO variable set to blank to disable email notifications.
 
 ########## END Configuration ####################
 
@@ -223,12 +224,15 @@ function ABEND {
     [ $DEBUGON ] && SHOWMAIL=""
 
     # send an email notification
-    sendEmail $SHOWMAIL -s $MAIL_SERVER -f $MAIL_FROM -t $MAIL_TO \
+    if [ $MAIL_TO ] 
+    then
+      sendEmail $SHOWMAIL -s $MAIL_SERVER -f $MAIL_FROM -t $MAIL_TO \
               -u "[ONA:$(basename $0)] $SRV_FQDN: Failure during TinyDNS rebuild." \
               -m "The TinyDNS server rebuild for '$SRV_FQDN' has encountered a failure during its last rebuild, please check the status of the server.  The last configuration file was left at this location: $ONA_PATH/data.ona.$TMSTAMP"
-    if [ $? -ne 0 ]
-    then
+      if [ $? -ne 0 ]
+      then
         ONA_LOG "ERROR => There was an issue sending the notification email."
+      fi
     fi
     exit 1
 }
