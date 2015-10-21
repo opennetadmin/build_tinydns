@@ -86,7 +86,7 @@ function build_tinydns_conf($options="") {
     global $conf, $self, $onadb;
 
     // Version - UPDATE on every edit!
-    $version = '1.02';
+    $version = '1.03';
 
     printmsg("DEBUG => build_tinydns_conf({$options}) called", 3);
 
@@ -111,7 +111,6 @@ Builds a tinydns config file for a server from the database
     server=NAME or ID        Build config for specified server
 
   Optional:
-    txt_notes                Enables building of TXT records from host notes
     ptr_subnets              Enables building of PTR records for subnet addresses
                              Only available when using server option.
 
@@ -126,14 +125,13 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
 */
 
 
-    $options['txt_notes']   = sanitize_YN($options['txt_notes'], 'N');
     $options['ptr_subnets'] = sanitize_YN($options['ptr_subnets'], 'N');
 
     $domain_text = '';
 
     // loop through records and display them
     if ($options['domain']) {
-        list($status, $output) = process_domain($options['domain'],$options['txt_notes']);
+        list($status, $output) = process_domain($options['domain']);
         $text = "# TinyDNS config file for domain '{$options['domain']}'\n";
         $text .= $output;
     }
@@ -154,7 +152,7 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
         list($status, $rows, $records) = db_get_records($onadb, 'dns_server_domains a, domains d', "a.host_id = {$shost['id']} AND a.domain_id = d.id", 'd.name desc');
 
         foreach ($records as $sdomain) {
-            list($status, $output) = process_domain($sdomain['domain_id'],$options['txt_notes']);
+            list($status, $output) = process_domain($sdomain['domain_id']);
             $text .= $output;
         }
 
@@ -199,7 +197,7 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
 
 
 
-function process_domain($domainname="",$txtnotes='') {
+function process_domain($domainname='') {
     global $onadb;
     $text = '';
 
@@ -255,24 +253,6 @@ function process_domain($domainname="",$txtnotes='') {
 
         // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
         if (!strcmp($dnsrecord['ttl'],$domain['default_ttl'])) $dnsrecord['ttl'] = '';
-
-
-        // Check if this record is primary with a note
-        if ($txtnotes == 'Y') {
-            list($status, $rows, $hosttxt) = ona_get_record("primary_dns_id = {$dnsrecord['id']} and 'notes' not like ''",'hosts');
-            if ($rows) {
-                $fqdn = $dnsrecord['name'].$domain['fqdn'];
-
-                // convert the special characters
-                //'example.com:colons(\072)\040and\040newlines\040(\015\012)\040need\040to\040be\040escaped.:86400
-                // (:) carriage returns (\r) and line feeds. (\n) looks like spaces could be converted too
-                // the \r and \n are not working properly when replaced.. for now I'll just blank them out
-                $hosttxt['notes'] = preg_replace(array('/:/','/\r/','/\n/'),array("\\\\072"," "," "),$hosttxt['notes']);
-
-                //'fqdn:s:ttl:timestamp:lo..... you need to use octal \nnn codes to include arbitrary bytes inside s; for example, \072 is a colon.
-                if ($hosttxt['notes']) $text .= sprintf("'%-{$datawidth}s\n" ,"{$fqdn}:{$hosttxt['notes']}:{$dnsrecord['ttl']}:");
-            }
-        }
 
         if ($dnsrecord['type'] == 'NS') {
             // Find the interface record
