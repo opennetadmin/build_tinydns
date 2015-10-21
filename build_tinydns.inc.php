@@ -15,6 +15,40 @@ if (file_exists(dirname(__FILE__)."/install.php")) {
 
 
 
+// Octal character count
+function characterCount($line) {
+  return( sprintf("\%'.03o", strlen($line)) );
+}
+
+// Octal escape a number
+function escnum($number) {
+  $highNumber = 0;
+  if ( $number - 256 >= 0 ) {
+    $highNumber = (int)( $number / 256 );
+    $number = $number - ( $highNumber * 256 );
+  }
+  $out = sprintf("\%'.03o", $highNumber);
+  $out = $out.sprintf("\%'.03o", $number);
+
+  return( $out );
+}
+
+
+
+// Octal escape non alpha characters
+function esctext($text) {
+  $esc = '';
+  foreach(str_split($text) as $char) {
+    if (!preg_match("/[a-zA-Z0-9]/", $char)) {
+    #if (!preg_match("/[\r\n\t: \/]/", $char)) {
+      $esc = $esc.sprintf("\%'.03o",ord($char));
+    } else {
+      $esc = $esc.$char;
+    }
+  }
+  return $esc;
+}
+
 
 
 
@@ -418,12 +452,33 @@ function process_domain($domainname="",$txtnotes='') {
             $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$iprev}.{$arpatype}.arpa:{$ptr['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
+        // Process SRV records
+        // found some great examples of all this at: http://www.anders.com/projects/sysadmin/djbdnsRecordBuilder/buildRecord.txt
+        if ($dnsrecord['type'] == 'SRV') {
+            // Find the interface record
+            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
+            if ($status or !$rows) {
+                printmsg("ERROR => build_tinydns: Unable to find interface record for SRV record!",3);
+                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for SRV record!";
+                continue;
+            }
+
+            // Get the name info that the SRV points to
+            list($status, $rows, $srv) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
+
+            $fqdn = $dnsrecord['name'].$domain['fqdn'];
+
+            $tar = "";
+            $chunks = explode(".", {$srv['name']}.{$srv['domain_fqdn']});
+            foreach ($chunks as $chunk) {
+              $tar = $tar . characterCount( $chunk ) . $chunk;
+            }
+
+            // :sip.tcp.example.com:33:\000\001\000\002\023\304\003pbx\007example\003com\000:3600
+            $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$fqdn}:33:".escnum($pri).escnum($wei).escnum($port).$tar."\\000:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
+        }
+
     }
-
-    // Need to do SRV records like this so users dont have to patch tinydns.
-    // found some great examples of all this at: http://www.anders.com/projects/sysadmin/djbdnsRecordBuilder/buildRecord.txt
-    // :sip.tcp.example.com:33:\000\001\000\002\023\304\003pbx\007example\003com\000
-
 
     $text .= "# ---------------- END DOMAIN {$domain['name']} ---------\n";
 
