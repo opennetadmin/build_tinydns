@@ -227,11 +227,10 @@ function ABEND {
 function USAGE {
 cat <<-EOF
 
-Usage: `basename $0` [-b] [-d] [-p] [-t] [-v] [-s <SERVER_FQDN>]
+Usage: `basename $0` [-b] [-d] [-p] [-v] [-s <SERVER_FQDN>]
 
   -s:  The FQDN of the server to build a configuration for
   -p:  When building, build PTR records for all subnets in the database
-  -t:  When building, build TXT records from notes associated with a host
   -d:  Dry run mode, only builds the file, does not restart TinyDNS
   -b:  Batch mode, execute this script and return a SUCCESS or FAILURE message only
   -v:  Display more verbose debugging output
@@ -250,10 +249,6 @@ The -p option will generate PTR records for each subnet address in the database.
 is useful for doing dns lookups on base addresses like 10.1.1.0 to find out the name
 of that subnet as defined in ONA.
 
-The -t option will generate TXT records for any host that has a note defined at the host
-level in ONA.  This is a generic way to use DNS lookups to retrieve general information
-about a host.
-
 EOF
 }
 
@@ -264,7 +259,6 @@ while getopts "s:vbdpt" options; do
     d ) DRYRUN=true;;
     v ) DEBUGON=true;;
     p ) BUILDSUBNETPTR=ptr_subnets;;
-    t ) BUILDTXT=txt_notes;;
     s ) SRV_FQDN=$OPTARG;;
     \? ) USAGE
          exit 1;;
@@ -309,8 +303,8 @@ then
 fi
 
 # Get config from database and append it to our temp file
-[ $DEBUGON ] && echo "$DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT -> $ONA_PATH/data.ona.$TMSTAMP"
-if ! $DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT >> $ONA_PATH/data.ona.$TMSTAMP
+[ $DEBUGON ] && echo "$DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR -> $ONA_PATH/data.ona.$TMSTAMP"
+if ! $DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR >> $ONA_PATH/data.ona.$TMSTAMP
 then
     ONA_LOG "ERROR => Unable to build TinyDNS config file."
     ABEND
