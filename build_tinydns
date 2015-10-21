@@ -160,6 +160,10 @@
 [ ! -r /etc/onabase ] && echo "[$0] ERROR: Unable to read /etc/onabase." && exit 1
 ONABASE=`cat /etc/onabase`
 
+########### Configuration ##############
+# You should take the follwoing configuration items and place them in $ONABASE/etc/build_tinydns.conf
+# If that file is not found the following defaults will be used
+#
 # This is the base path for storing tinydns configuration files generated from ONA.
 # There will be a directory for each server FQDN that is built using this script.
 # This is the path to where your tinydns data file will be and would be referenced
@@ -190,8 +194,14 @@ MAIL_SERVER=mx.example.com				# name or IP of the mail server to use
 MAIL_FROM=ona-build_tinydns@dnssrv.example.com   	# email address to use in the from field
 MAIL_TO=oncall@example.com             			# email address(es) to send our notifications to
 
+########## END Configuration ####################
 
 ###################### No need to change anything below here ################################
+# Pull in the config file if there is one
+if [ -f $ONABASE/etc/build_tinydns.conf ]
+then
+  . $ONABASE/etc/build_tinydns.conf
+fi
 
 # This will log a message in a standardized way
 # Its job is simple.. take the message that was passed in and log it via some mechanism.
@@ -333,7 +343,7 @@ else
         ONA_LOG "ERROR => There was an issue with your datafile, please correct it.  Reverting to original configuration."
         ABEND
     else
-	# Remove the temp file
+        # Remove the temp file
         rm $ONA_PATH/data.ona.$TMSTAMP
 
         # Clean up old,failed, configs (only good for the next 100 years or so!)
