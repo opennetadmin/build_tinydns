@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build_tinydns -- v1.0
+# build_tinydns -- v2.0
 #
 # Written by: Matt Pascoe <matt@opennetadmin.com>
 #
@@ -47,9 +47,7 @@
 # FOR YOU, GREAT!  IF NOT THEN MAKE WHATEVER ADJUSTMENTS TO IT YOU NEED TO GET IT WORKING!
 # ASK FOR HELP IN THE FORUMS IF NEEDED.
 #
-# REQUIRES: dcm.pl, build_tinydns_conf module, working tinydns installation, sendEmail
-#
-# dcm.pl should be working on your system and either in your path or you will need to put the full path to it in the DCM_PATH variable below.
+# REQUIRES: build_tinydns_conf plugin, working tinydns installation, sendEmail
 #
 # Remember that the checks done by tinydns are only syntax checks.  They will not ensure that the content of your files are correct.
 # If you have missing records or incorrect data it could impact your environment or the functionality of other domain servers.
@@ -78,10 +76,6 @@
 # It must be the PRIMARY name, not an CNAME or alternate A record.
 #
 # For ease of use, it is recommended to add /opt/ona/bin to your $PATH environment variable
-#
-# You will need to execute the following dcm commands to automatically create the appropriate module entries (the install process should do this for you):
-#
-# dcm.pl -r add_module name=build_tinydns_conf desc="Build TinyDNS config file" file=build/build_tinydns.inc.php
 #
 # You must set up your tinydns server on your own before you use this script.  The assumption is that you have run something
 # similar to the following command to set up the tinydns environment under the ONA directory structure:
@@ -160,10 +154,6 @@
 [ ! -r /etc/onabase ] && echo "[$0] ERROR: Unable to read /etc/onabase." && exit 1
 ONABASE=`cat /etc/onabase`
 
-########### Configuration ##############
-# You should take the follwoing configuration items and place them in $ONABASE/etc/build_tinydns.conf
-# If that file is not found the following defaults will be used
-#
 # This is the base path for storing tinydns configuration files generated from ONA.
 # There will be a directory for each server FQDN that is built using this script.
 # This is the path to where your tinydns data file will be and would be referenced
@@ -177,8 +167,9 @@ ONA_PATH="${ONABASE}/etc/tinydns"
 # This is a default value only, you can specify the server name using the -s switch.
 #SRV_FQDN=`hostname -f`
 
-# Path to the dcm.pl command.  Also include any options that might be needed
-DCM_PATH="${ONABASE}/bin/dcm.pl"
+# To generate an api token run the following command from the CLI:
+
+API_TOKEN="<YOU MUST GENERATE ONE!>"
 
 # Remove the temporary configuration files that are older than $DAYSOLD.  This uses the find
 # command to remove anything older than this amount of days.  These are configs that had an
@@ -193,16 +184,9 @@ SYSTEMINIT="make"
 MAIL_SERVER=mx.example.com				# name or IP of the mail server to use
 MAIL_FROM=ona-build_tinydns@dnssrv.example.com   	# email address to use in the from field
 MAIL_TO=oncall@example.com             			# email address(es) to send our notifications to
-# leave MAIL_TO variable set to blank to disable email notifications.
 
-########## END Configuration ####################
 
 ###################### No need to change anything below here ################################
-# Pull in the config file if there is one
-if [ -f $ONABASE/etc/build_tinydns.conf ]
-then
-  . $ONABASE/etc/build_tinydns.conf
-fi
 
 # This will log a message in a standardized way
 # Its job is simple.. take the message that was passed in and log it via some mechanism.
@@ -224,15 +208,12 @@ function ABEND {
     [ $DEBUGON ] && SHOWMAIL=""
 
     # send an email notification
-    if [ $MAIL_TO ] 
-    then
-      sendEmail $SHOWMAIL -s $MAIL_SERVER -f $MAIL_FROM -t $MAIL_TO \
+    sendEmail $SHOWMAIL -s $MAIL_SERVER -f $MAIL_FROM -t $MAIL_TO \
               -u "[ONA:$(basename $0)] $SRV_FQDN: Failure during TinyDNS rebuild." \
               -m "The TinyDNS server rebuild for '$SRV_FQDN' has encountered a failure during its last rebuild, please check the status of the server.  The last configuration file was left at this location: $ONA_PATH/data.ona.$TMSTAMP"
-      if [ $? -ne 0 ]
-      then
+    if [ $? -ne 0 ]
+    then
         ONA_LOG "ERROR => There was an issue sending the notification email."
-      fi
     fi
     exit 1
 }
@@ -241,10 +222,11 @@ function ABEND {
 function USAGE {
 cat <<-EOF
 
-Usage: `basename $0` [-b] [-d] [-p] [-v] [-s <SERVER_FQDN>]
+Usage: `basename $0` [-b] [-d] [-p] [-t] [-v] [-s <SERVER_FQDN>]
 
   -s:  The FQDN of the server to build a configuration for
   -p:  When building, build PTR records for all subnets in the database
+  -t:  When building, build TXT records from notes associated with a host
   -d:  Dry run mode, only builds the file, does not restart TinyDNS
   -b:  Batch mode, execute this script and return a SUCCESS or FAILURE message only
   -v:  Display more verbose debugging output
@@ -263,6 +245,10 @@ The -p option will generate PTR records for each subnet address in the database.
 is useful for doing dns lookups on base addresses like 10.1.1.0 to find out the name
 of that subnet as defined in ONA.
 
+The -t option will generate TXT records for any host that has a note defined at the host
+level in ONA.  This is a generic way to use DNS lookups to retrieve general information
+about a host.
+
 EOF
 }
 
@@ -273,6 +259,7 @@ while getopts "s:vbdpt" options; do
     d ) DRYRUN=true;;
     v ) DEBUGON=true;;
     p ) BUILDSUBNETPTR=ptr_subnets;;
+    t ) BUILDTXT=txt_notes;;
     s ) SRV_FQDN=$OPTARG;;
     \? ) USAGE
          exit 1;;
@@ -317,8 +304,9 @@ then
 fi
 
 # Get config from database and append it to our temp file
-[ $DEBUGON ] && echo "$DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR -> $ONA_PATH/data.ona.$TMSTAMP"
-if ! $DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR >> $ONA_PATH/data.ona.$TMSTAMP
+[ $DEBUGON ] && echo "$DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT -> $ONA_PATH/data.ona.$TMSTAMP"
+#if ! $DCM_PATH -r build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT >> $ONA_PATH/data.ona.$TMSTAMP
+if !  build_tinydns_conf server=$SRV_FQDN $BUILDSUBNETPTR $BUILDTXT >> $ONA_PATH/data.ona.$TMSTAMP
 then
     ONA_LOG "ERROR => Unable to build TinyDNS config file."
     ABEND
@@ -347,7 +335,7 @@ else
         ONA_LOG "ERROR => There was an issue with your datafile, please correct it.  Reverting to original configuration."
         ABEND
     else
-        # Remove the temp file
+	# Remove the temp file
         rm $ONA_PATH/data.ona.$TMSTAMP
 
         # Clean up old,failed, configs (only good for the next 100 years or so!)

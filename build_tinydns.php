@@ -1,61 +1,5 @@
 <?php
 
-// Lets do some initial install related stuff
-if (file_exists(dirname(__FILE__)."/install.php")) {
-    printmsg("DEBUG => Found install file for ".basename(dirname(__FILE__))." plugin.", 1);
-    include(dirname(__FILE__)."/install.php");
-} else {
-
-// Place initial popupwindow content here if this plugin uses one.
-
-
-}
-
-
-
-
-
-// Octal character count
-function characterCount($line) {
-  return( sprintf("\%'.03o", strlen($line)) );
-}
-
-// Octal escape a number
-function escnum($number) {
-  $highNumber = 0;
-  if ( $number - 256 >= 0 ) {
-    $highNumber = (int)( $number / 256 );
-    $number = $number - ( $highNumber * 256 );
-  }
-  $out = sprintf("\%'.03o", $highNumber);
-  $out = $out.sprintf("\%'.03o", $number);
-
-  return( $out );
-}
-
-
-
-// Octal escape non alpha characters
-function esctext($text) {
-  $esc = '';
-  foreach(str_split($text) as $char) {
-    if (!preg_match("/[a-zA-Z0-9]/", $char)) {
-    #if (!preg_match("/[\r\n\t: \/]/", $char)) {
-      $esc = $esc.sprintf("\%'.03o",ord($char));
-    } else {
-      $esc = $esc.$char;
-    }
-  }
-  return $esc;
-}
-
-
-
-
-
-// Make sure we have necessary functions & DB connectivity
-require_once($conf['inc_functions_db']);
-
 
 ///////////////////////////////////////////////////////////////////////
 //  Function: build_tinydns_conf (string $options='')
@@ -86,37 +30,12 @@ function build_tinydns_conf($options="") {
     global $conf, $self, $onadb;
 
     // Version - UPDATE on every edit!
-    $version = '1.03';
-
-    printmsg("DEBUG => build_tinydns_conf({$options}) called", 3);
-
-    // Parse incoming options string to an array
-    $options = parse_options($options);
+    $version = '2.00';
 
     // Return the usage summary if we need to
-    if ($options['help'] or (!$options['domain'] and !$options['server'])) {
-        // NOTE: Help message lines should not exceed 80 characters for proper display on a console
-        $self['error'] = 'ERROR => Insufficient parameters';
-        return(array(1,
-<<<EOF
-
-build_tinydns_conf-v{$version}
-Builds a tinydns config file for a server from the database
-
-  Synopsis: build_tinydns_conf [KEY=VALUE] ...
-
-  Required:
-    domain=DOMAIN or ID      Build config file for specified domain
-    OR
-    server=NAME or ID        Build config for specified server
-
-  Optional:
-    ptr_subnets              Enables building of PTR records for subnet addresses
-                             Only available when using server option.
-
-\n
-EOF
-        ));
+    if ((!isset($options['domain']) and !isset($options['server']))) {
+        $self['error'] = 'Insufficient parameters';
+        return(array(1,$self['error']));
     }
 
 /*
@@ -124,25 +43,30 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
 
 */
 
-
-    $options['ptr_subnets'] = sanitize_YN($options['ptr_subnets'], 'N');
+    if (isset($options['txt_notes'])) {
+      $options['txt_notes']   = sanitize_YN($options['txt_notes'], 'N');
+    } else {
+      $options['txt_notes'] = '';
+    }
+    if (isset($options['ptr_subnets']))
+      $options['ptr_subnets'] = sanitize_YN($options['ptr_subnets'], 'N');
 
     $domain_text = '';
 
     // loop through records and display them
-    if ($options['domain']) {
-        list($status, $output) = process_domain($options['domain']);
+    if (isset($options['domain'])) {
+        list($status, $output) = process_domain($options['domain'],$options['txt_notes']);
         $text = "# TinyDNS config file for domain '{$options['domain']}'\n";
         $text .= $output;
     }
 
-    if ($options['server']) {
+    // TODO: check that it is actually a dns server and not just a host
+    if (isset($options['server'])) {
         list($status, $rows, $shost) = ona_find_host($options['server']);
-        printmsg("DEBUG => build_tinydns_conf() server record: {$domain['server']}", 3);
         if (!$shost['id']) {
-            printmsg("DEBUG => Unknown server record: {$options['server']}",3);
-            $self['error'] = "ERROR => Unknown server record: {$options['server']}";
-            return(array(3, $self['error'] . "\n"));
+            $self['error'] = "Unknown server record: {$options['server']}";
+            printmsg($self['error'], 'error');
+            return(array(3, $self['error']));
         }
 
         $text = "\n# TinyDNS config file for server '{$options['server']}'\n";
@@ -152,11 +76,11 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
         list($status, $rows, $records) = db_get_records($onadb, 'dns_server_domains a, domains d', "a.host_id = {$shost['id']} AND a.domain_id = d.id", 'd.name desc');
 
         foreach ($records as $sdomain) {
-            list($status, $output) = process_domain($sdomain['domain_id']);
+            list($status, $output) = process_domain($sdomain['domain_id'],$options['txt_notes']);
             $text .= $output;
         }
 
-        if ($options['ptr_subnets'] == 'Y') {
+        if (isset($options['ptr_subnets']) and $options['ptr_subnets'] == 'Y') {
             $text .= "# ---------------- START PTR records for all subnets ---------\n";
 
             list($status, $rows, $subnets) = db_get_records($onadb, 'subnets', 'id > 0');
@@ -197,25 +121,24 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
 
 
 
-function process_domain($domainname='') {
+function process_domain($domainname="",$txtnotes='') {
     global $onadb;
     $text = '';
 
     if (is_numeric($domainname)) {
         list($status, $rows, $domain) = ona_get_domain_record(array('id' => $domainname));
         if (!$rows) {
-            printmsg("DEBUG => Unknown domain record: {$domainname}",3);
-            $self['error'] = "ERROR => Unknown domain record: {$domainname}";
-            return(array(2, $self['error'] . "\n"));
+            printmsg("Unknown domain record: {$domainname}",'error');
+            $self['error'] = "Unknown domain record: {$domainname}";
+            return(array(2, $self['error']));
         }
     } else {
         // Get the domain information
         list($status, $rows, $domain) = ona_find_domain($domainname);
-        printmsg("DEBUG => build_tinydns_conf() Domain record: {$domain['zone']}", 3);
         if (!$domain['id']) {
-            printmsg("DEBUG => Unknown domain record: {$domainname}",3);
-            $self['error'] = "ERROR => Unknown domain record: {$domainname}";
-            return(array(2, $self['error'] . "\n"));
+            printmsg("Unknown domain record: {$domainname}",'error');
+            $self['error'] = "Unknown domain record: {$domainname}";
+            return(array(2, $self['error']));
         }
     }
 
@@ -254,13 +177,31 @@ function process_domain($domainname='') {
         // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
         if (!strcmp($dnsrecord['ttl'],$domain['default_ttl'])) $dnsrecord['ttl'] = '';
 
+
+        // Check if this record is primary with a note
+        if ($txtnotes == 'Y') {
+            list($status, $rows, $hosttxt) = ona_get_record("primary_dns_id = {$dnsrecord['id']} and 'notes' not like ''",'hosts');
+            if ($rows) {
+                $fqdn = $dnsrecord['name'].$domain['fqdn'];
+
+                // convert the special characters
+                //'example.com:colons(\072)\040and\040newlines\040(\015\012)\040need\040to\040be\040escaped.:86400
+                // (:) carriage returns (\r) and line feeds. (\n) looks like spaces could be converted too
+                // the \r and \n are not working properly when replaced.. for now I'll just blank them out
+                $hosttxt['notes'] = preg_replace(array('/:/','/\r/','/\n/'),array("\\\\072"," "," "),$hosttxt['notes']);
+
+                //'fqdn:s:ttl:timestamp:lo..... you need to use octal \nnn codes to include arbitrary bytes inside s; for example, \072 is a colon.
+                if ($hosttxt['notes']) $text .= sprintf("'%-{$datawidth}s\n" ,"{$fqdn}:{$hosttxt['notes']}:{$dnsrecord['ttl']}:");
+            }
+        }
+
         if ($dnsrecord['type'] == 'NS') {
             // Find the interface record
             list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
             if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for NS record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for NS record!";
-                //return(array(5, $self['error'] . "\n"));
+                printmsg("Unable to find interface record for NS record!",'error');
+                $self['error'] = "build_tinydns: Unable to find interface record for NS record!";
+                //return(array(5, $self['error']));
             }
 
             // Get the name info that the cname points to
@@ -278,9 +219,9 @@ function process_domain($domainname='') {
             // Find the interface record
             list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
             if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for A record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for A record!";
-                //return(array(5, $self['error'] . "\n"));
+                printmsg("Unable to find interface record for A record!",'error');
+                $self['error'] = "Unable to find interface record for A record!";
+                //return(array(5, $self['error']));
                 continue;
             }
 
@@ -330,10 +271,12 @@ function process_domain($domainname='') {
                     if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
 
                     list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
-                    $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
-                    $ipflip = ip_mangle($int['ip_addr'],'flip');
-                    //^fqdn:p:ttl:timestamp:lo
-                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
+                    if($rows) {
+                      $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
+                      $ipflip = ip_mangle($int['ip_addr'],'flip');
+                      //^fqdn:p:ttl:timestamp:lo
+                      $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
+                    }
                 }
             }
 
@@ -343,9 +286,9 @@ function process_domain($domainname='') {
             // Find the interface record
             list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
             if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for CNAME record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for CNAME record!";
-                //return(array(5, $self['error'] . "\n"));
+                printmsg("Unable to find interface record for CNAME record!",'error');
+                $self['error'] = "Unable to find interface record for CNAME record!";
+                //return(array(5, $self['error']));
                 continue;
             }
 
@@ -365,7 +308,6 @@ function process_domain($domainname='') {
 //             if ($status or !$rows) {
 //                 printmsg("ERROR => Unable to find interface record!",3);
 //                 $self['error'] = "ERROR => Unable to find interface record!";
-//                 //return(array(5, $self['error'] . "\n"));
 //             }
 
 
@@ -407,9 +349,9 @@ function process_domain($domainname='') {
             // Find the interface record
             list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
             if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for PTR record!",3);
-                $self['error'] = "ERROR => Ubuild_tinydns: nable to find interface record for PTR record!";
-                //return(array(5, $self['error'] . "\n"));
+                printmsg("Unable to find interface record for PTR record!",'error');
+                $self['error'] = "Unable to find interface record for PTR record!";
+                //return(array(5, $self['error']));
                 continue;
             }
 
@@ -432,33 +374,12 @@ function process_domain($domainname='') {
             $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$iprev}.{$arpatype}.arpa:{$ptr['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
-        // Process SRV records
-        // found some great examples of all this at: http://www.anders.com/projects/sysadmin/djbdnsRecordBuilder/buildRecord.txt
-        if ($dnsrecord['type'] == 'SRV') {
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for SRV record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for SRV record!";
-                continue;
-            }
-
-            // Get the name info that the SRV points to
-            list($status, $rows, $srv) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
-
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
-
-            $tar = "";
-            $chunks = explode(".", $srv['name'].".".$srv['domain_fqdn']);
-            foreach ($chunks as $chunk) {
-              $tar = $tar . characterCount( $chunk ) . $chunk;
-            }
-
-            // :sip.tcp.example.com:33:\000\001\000\002\023\304\003pbx\007example\003com\000:3600
-            $text .= sprintf(":%-{$datawidth}s%s\n" ,"{$fqdn}:33:".escnum($dnsrecord['srv_pri']).escnum($dnsrecord['srv_weight']).escnum($dnsrecord['srv_port']).$tar."\\000:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
-        }
-
     }
+
+    // Need to do SRV records like this so users dont have to patch tinydns.
+    // found some great examples of all this at: http://www.anders.com/projects/sysadmin/djbdnsRecordBuilder/buildRecord.txt
+    // :sip.tcp.example.com:33:\000\001\000\002\023\304\003pbx\007example\003com\000
+
 
     $text .= "# ---------------- END DOMAIN {$domain['name']} ---------\n";
 
@@ -468,15 +389,3 @@ function process_domain($domainname='') {
     return(array(0, $text));
 
 }
-
-
-
-
-
-
-
-
-
-
-
-?>

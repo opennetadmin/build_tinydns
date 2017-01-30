@@ -1,0 +1,59 @@
+FORMAT: 1A
+HOST: https://localhost/rest.php/v1
+
+# TinyDNS configuration builder
+  This plugin will allow you to generate tinydns .cdb config files for
+specific `domains` or `servers`.
+
+Please refer to the top portion of the [`build_tinydns` script](/local/plugins/build_tinydns/build_tinydns) for
+more detailed instructions on how to configure and use this plugin.
+
+# Group Config Types
+
+## Domains [/domains/{domain}/tinydnsconf{?txt_notes}]
+
+### Domain config [GET]
+
+Build TinyDNS configuration for a specific domain. 
+
++ Parameters
+  + txt_notes: `Y` (optional) - Enables building of TXT records from host notes.
+
++ Response 200 (text/plain;charset=utf-8)
+
+        # TinyDNS config file for domain 'example.com'
+
+        # ---------------- START DOMAIN example.com ---------
+        # TOTAL RECORDS FOR DOMAIN 'example.com' (count=0)
+        Zexample.com:ns1.boi.example.com:domains@example.com::16384:2048:1048576:2560:86400::
+
+        # ---------------- END DOMAIN example.com ---------
+
++ Response 403 (application/json;charset=utf-8)
+
+        {"status_code": 1, "status_msg": "Some sort of error" }
+
+## Servers [/hosts/{host}/services/tinydnsconf{?txt_notes,ptr_subnets}]
+
+### Server config [GET]
+
+Build TinyDNS configuration for a specific server. 
+
++ Parameters
+  + txt_notes: `Y` (optional) - Enables building of TXT records from host notes.
+  + ptr_subnets: `Y` (optional) - Enables building of PTR records for subnet addresses. Only available when building for a server.
+
++ Response 200 (text/plain;charset=utf-8)
+
+        # TinyDNS config file for server 'server.example.com'
+
+        # ---------------- START DOMAIN example.com ---------
+        # TOTAL RECORDS FOR DOMAIN 'example.com' (count=0)
+        Zexample.com:ns1.boi.example.com:domains@example.com::16384:2048:1048576:2560:86400::
+
+        # ---------------- END DOMAIN example.com ---------
+
++ Response 403 (application/json;charset=utf-8)
+
+        {"status_code": 1, "status_msg": "Some sort of error" }
+
