@@ -86,7 +86,7 @@ function build_tinydns_conf($options="") {
     global $conf, $self, $onadb;
 
     // Version - UPDATE on every edit!
-    $version = '1.03';
+    $version = '1.04';
 
     printmsg("DEBUG => build_tinydns_conf({$options}) called", 3);
 
@@ -245,14 +245,11 @@ function process_domain($domainname='') {
         // If there are notes, put the comment character in front of it
         if ($dnsrecord['notes']) $dnsrecord['notes'] = '# '.str_replace("\n"," ",$dnsrecord['notes']);
 
-        // If the ttl is empty then make it truely empty
-        if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = '';
+        // If the ttl is empty then make it the domain level setting
+        if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = $domain['default_ttl'];
 
         // Dont print a dot unless hostname has a value
         if ($dnsrecord['name']) $dnsrecord['name'] = $dnsrecord['name'].'.';
-
-        // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
-        if (!strcmp($dnsrecord['ttl'],$domain['default_ttl'])) $dnsrecord['ttl'] = '';
 
         if ($dnsrecord['type'] == 'NS') {
             // Find the interface record
@@ -293,10 +290,8 @@ function process_domain($domainname='') {
             // remove any duplicates that may be added here and in the reverse PTR zone.
             list($status, $ptrrows, $ptr) = ona_get_dns_record(array('dns_id' => $dnsrecord['id'], 'interface_id' => $dnsrecord['interface_id'],'type' => 'PTR'), '');
             if ($ptrrows) {
-                    // If the ttl is empty then make it truely empty
-                    if ($ptr['ttl'] == 0) $ptr['ttl'] = '';
-                    // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
-                    if (!strcmp($ptr['ttl'],$domain['default_ttl'])) $ptr['ttl'] = '';
+                    // If the ttl is empty then make it the domain default
+                    if ($ptr['ttl'] == 0) $ptr['ttl'] = $domain['default_ttl'];
 
                     if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
 
@@ -324,9 +319,7 @@ function process_domain($domainname='') {
             if ($ptrsrows) {
                 foreach ($ptrs as $ptr) {
                     // If the ttl is empty then make it truely empty
-                    if ($ptr['ttl'] == 0) $ptr['ttl'] = '';
-                    // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
-                    if (!strcmp($ptr['ttl'],$domain['default_ttl'])) $ptr['ttl'] = '';
+                    if ($ptr['ttl'] == 0) $ptr['ttl'] = $domain['default_ttl'];
                     if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
 
                     list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
@@ -417,9 +410,7 @@ function process_domain($domainname='') {
             list($status, $rows, $ptr) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
             // If the ttl is empty then make it truely empty
-            if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = '';
-            // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
-            if (!strcmp($ptr['ttl'],$domain['default_ttl'])) $ptr['ttl'] = '';
+            if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = $domain['default_ttl'];
             if ($dnsrecord['notes']) $dnsrecord['notes'] = '# '.$dnsrecord['notes'];
 
             $fqdn = $dnsrecord['name'].$domain['fqdn'];
