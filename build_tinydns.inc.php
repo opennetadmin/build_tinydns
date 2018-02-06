@@ -86,7 +86,7 @@ function build_tinydns_conf($options="") {
     global $conf, $self, $onadb;
 
     // Version - UPDATE on every edit!
-    $version = '1.04';
+    $version = '1.06';
 
     printmsg("DEBUG => build_tinydns_conf({$options}) called", 3);
 
@@ -197,7 +197,7 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
 
 
 
-function process_domain($domainname='') {
+function process_domain($domainname='',$output_type='tinydns') {
     global $onadb;
     $text = '';
 
@@ -221,11 +221,8 @@ function process_domain($domainname='') {
 
     $domain['name'] = ona_build_domain_name($domain['id']);
 
-    list($status, $rows, $records) = db_get_records($onadb, 'dns', array('domain_id' => $domain['id']));
-
     // print the opening comment with row count
     $text .= "\n\n# ---------------- START DOMAIN {$domain['name']} ---------\n";
-    $text .= "# TOTAL RECORDS FOR DOMAIN '{$domain['name']}' (count={$rows})\n";
 
     // Build the SOA record
     $text .= "Z{$domain['fqdn']}:{$domain['primary_master']}:{$domain['admin_email']}::{$domain['refresh']}:{$domain['retry']}:{$domain['expiry']}:{$domain['minimum']}:{$domain['default_ttl']}::\n\n";
@@ -234,8 +231,65 @@ function process_domain($domainname='') {
 
     $datawidth = 60;
 
+    // Lets gather the data about the records in the domain.  This uses a lot of SQL fun to try and be efficient
+    // TODO: test this better against non MYSQL based backends
+
+    $query="
+select
+  dns_views.name as view,
+  cast(case
+    when type = 'ptr' AND ip_addr < 4294967296 then trim(trailing concat('.',domains.name) from concat_ws('.', ip_addr % 256, (ip_addr >> 8) % 256, (ip_addr >> 16) % 256, (ip_addr >> 24) % 256, 'in-addr.arpa'))
+    when type = 'ptr' AND ip_addr > 4294967296 then trim(trailing concat('.',domains.name) from concat_ws('.', ip_addr % 256, (ip_addr >> 8) % 256, (ip_addr >> 16) % 256, (ip_addr >> 24) % 256, 'ip6.arpa'))
+    when dns.name = '' then '@'
+    else concat(dns.name,'.',domains.name)
+    end as char) as fqdn,
+  dns.name,
+  case when ttl > 0 then ttl else default_ttl end as ttl,
+  cast(case
+    when type = 'A' AND ip_addr < 4294967296 then 'A'
+    when type = 'A' AND ip_addr > 4294967296 then 'AAAA'
+    else type
+    end as char) as type,
+  case when type = 'mx' then mx_preference else '' end as mx_preference,
+  case when type = 'srv' then srv_pri else '' end as srv_pri,
+  case when type = 'srv' then srv_weight else '' end as srv_weight,
+  case when type = 'srv' then srv_port else '' end as srv_port,
+  cast(case
+    when type = 'txt' then txt
+    when type = 'srv' then concat_ws(' ',
+      (select concat(dns2.name, '.', domains.name, '.') from
+      dns as dns2 inner join domains on domains.id = dns2.domain_id where dns.dns_id = dns2.id))
+    when type in ('ptr', 'cname', 'mx', 'ns') then (select concat(dns2.name,'.',domains.name,'.') from
+      dns as dns2 inner join domains on domains.id = dns2.domain_id where dns.dns_id = dns2.id)
+    when type = 'A' then inet_ntoa(interfaces.ip_addr)
+    when type = 'AAAA' then inet_ntoa(interfaces.ip_addr)
+    end as char) as data,
+  dns.notes,
+  dns.interface_id,
+  dns.dns_id,
+  interfaces.ip_addr,
+  domains.name as domain_fqdn,
+  dns.ebegin
+
+from dns
+  inner join domains on dns.domain_id = domains.id
+  inner join dns_views on dns.dns_view_id = dns_views.id
+  left  join interfaces on interfaces.id = dns.interface_id
+
+where (dns.ebegin > 0 and now() >= dns.ebegin)
+and dns.domain_id = {$domain['id']}
+    ";
+
+    // exectue the query
+    $rs = $onadb->Execute($query);
+    if ($rs === false or (!$rs->RecordCount())) {
+        $self['error'] = 'ERROR => build_tinydns(): SQL query failed: ' . $onadb->ErrorMsg();
+        printmsg($self['error'], 0);
+    }
+    $rows = $rs->RecordCount();
+
     // Loop through the record set
-    foreach ($records as $dnsrecord) {
+    while ($dnsrecord = $rs->FetchRow()) {
         // Dont build records that begin in the future
         // FIXME: MP: find a way to convert a date into TAI64 format so that tinydns can manage its own record activation/deactivation etc.
         if (strtotime($dnsrecord['ebegin']) > time()) continue;
@@ -245,62 +299,26 @@ function process_domain($domainname='') {
         // If there are notes, put the comment character in front of it
         if ($dnsrecord['notes']) $dnsrecord['notes'] = '# '.str_replace("\n"," ",$dnsrecord['notes']);
 
-        // If the ttl is empty then make it the domain level setting
-        if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = $domain['default_ttl'];
-
         // Dont print a dot unless hostname has a value
         if ($dnsrecord['name']) $dnsrecord['name'] = $dnsrecord['name'].'.';
+        $fqdn = $dnsrecord['name'].$domain['fqdn'];
 
         if ($dnsrecord['type'] == 'NS') {
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for NS record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for NS record!";
-                //return(array(5, $self['error'] . "\n"));
-            }
-
             // Get the name info that the cname points to
             list($status, $rows, $ns) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
             list($status, $rows, $nsdomain) = ona_get_domain_record(array('id' => $dnsrecord['domain_id']), '');
 
             //&fqdn:ip:x:ttl:timestamp:lo
-            $text .= sprintf("&%-{$datawidth}s%s\n" ,"{$nsdomain['fqdn']}::{$ns['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
+            $text .= sprintf("&%-{$datawidth}s%s\n" ,"{$dnsrecord['domain_fqdn']}::{$ns['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
 
         if ($dnsrecord['type'] == 'A') {
             $typecode = '+';
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for A record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for A record!";
-                //return(array(5, $self['error'] . "\n"));
-                continue;
-            }
 
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
-
-            // Find out if this A record has a PTR as well
-            // If it does, go ahead and build a PTR entry.
-            // we will never build '=' style tinydns records, only + and ^ together.
-            // If we are building at a server level (multiple domains) then we will
-            // remove any duplicates that may be added here and in the reverse PTR zone.
-            list($status, $ptrrows, $ptr) = ona_get_dns_record(array('dns_id' => $dnsrecord['id'], 'interface_id' => $dnsrecord['interface_id'],'type' => 'PTR'), '');
-            if ($ptrrows) {
-                    // If the ttl is empty then make it the domain default
-                    if ($ptr['ttl'] == 0) $ptr['ttl'] = $domain['default_ttl'];
-
-                    if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
-
-                    list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
-                    $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
-                    $ipflip = ip_mangle($int['ip_addr'],'flip');
-                    //^fqdn:p:ttl:timestamp:lo
-                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
-            }
+            // Get the ip text
+            $interface['ip_addr_text'] = ip_mangle($dnsrecord['ip_addr'],'dotted');
 
             // See if this is a ipv6 record and convert the data
             if (strpos($interface['ip_addr_text'],':')) {
@@ -313,39 +331,12 @@ function process_domain($domainname='') {
 
             // +fqdn:ip:ttl:timestamp:lo
             $text .= sprintf("%s%-{$datawidth}s%s\n" ,$typecode,"{$fqdn}:{$interface['ip_addr_text']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
-
-            // Build any PTR records that reference this A record but dont have their own A record
-            list($status, $ptrsrows, $ptrs) = db_get_records($onadb, 'dns', "dns_id = {$dnsrecord['id']} and interface_id != {$dnsrecord['interface_id']} and type like 'PTR'", '');
-            if ($ptrsrows) {
-                foreach ($ptrs as $ptr) {
-                    // If the ttl is empty then make it truely empty
-                    if ($ptr['ttl'] == 0) $ptr['ttl'] = $domain['default_ttl'];
-                    if ($ptr['notes']) $ptr['notes'] = '# '.$ptr['notes'];
-
-                    list($status, $rows, $int) = ona_get_interface_record(array('id' => $ptr['interface_id']));
-                    $arpatype = (strpos($int['ip_addr_text'],':') ? 'ip6' : 'in-addr');
-                    $ipflip = ip_mangle($int['ip_addr'],'flip');
-                    //^fqdn:p:ttl:timestamp:lo
-                    $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$ipflip}.{$arpatype}.arpa:{$fqdn}:{$ptr['ttl']}:",$ptr['notes']);
-                }
-            }
-
         }
 
         if ($dnsrecord['type'] == 'CNAME') {
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for CNAME record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for CNAME record!";
-                //return(array(5, $self['error'] . "\n"));
-                continue;
-            }
-
             // Get the name info that the cname points to
             list($status, $rows, $cname) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
             // Cfqdn:p:ttl:timestamp:lo
             $text .= sprintf("C%-{$datawidth}s%s\n" ,"{$fqdn}:{$cname['name']}.{$cname['domain_fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
@@ -353,18 +344,6 @@ function process_domain($domainname='') {
 
 
         if ($dnsrecord['type'] == 'MX') {
-            // Find the interface record
-//             list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-//             if ($status or !$rows) {
-//                 printmsg("ERROR => Unable to find interface record!",3);
-//                 $self['error'] = "ERROR => Unable to find interface record!";
-//                 //return(array(5, $self['error'] . "\n"));
-//             }
-
-
-// I removed {$interface['ip_addr_text']} from the entry so that the IP would not be in the list.. it is not needed as
-// MX records require them to point to an A record that should have already been created in the file.
-
             // Get the name info that the record points to
             list($status, $rows, $mx) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
@@ -383,41 +362,31 @@ function process_domain($domainname='') {
 
 
         if ($dnsrecord['type'] == 'TXT') {
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
-
             // convert the special characters
             //'example.com:colons(\072)\040and\040newlines\040(\015\012)\040need\040to\040be\040escaped.:86400
             // (:) carriage returns (\r) and line feeds. (\n) looks like spaces could be converted too
             // the \r and \n are not tested but should work.
-            $dnsrecord['txt'] = preg_replace(array('/:/','/\r/','/\n/'),array("\\\\072"," "," "),$dnsrecord['txt']);
+            $dnsrecord['txt'] = preg_replace(array('/:/','/\r/','/\n/'),array("\\\\072"," "," "),$dnsrecord['data']);
 
             //'fqdn:s:ttl:timestamp:lo..... you need to use octal \nnn codes to include arbitrary bytes inside s; for example, \072 is a colon.
-            if ($dnsrecord['txt']) $text .= sprintf("'%-{$datawidth}s%s\n" ,"{$fqdn}:{$dnsrecord['txt']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
+            $text .= sprintf("'%-{$datawidth}s%s\n" ,"{$fqdn}:{$dnsrecord['txt']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
         }
 
 
         if ($dnsrecord['type'] == 'PTR') {
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for PTR record!",3);
-                $self['error'] = "ERROR => Ubuild_tinydns: nable to find interface record for PTR record!";
-                //return(array(5, $self['error'] . "\n"));
-                continue;
-            }
-
             // Get the name info that the record points to
             list($status, $rows, $ptr) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
             // If the ttl is empty then make it truely empty
-            if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = $domain['default_ttl'];
+            if ($dnsrecord['ttl'] == 0) $dnsrecord['ttl'] = '';
+            // Also, if the records ttl is the same as the domains ttl then dont display it, just to keep it "cleaner"
+            if (!strcmp($ptr['ttl'],$domain['default_ttl'])) $ptr['ttl'] = '';
             if ($dnsrecord['notes']) $dnsrecord['notes'] = '# '.$dnsrecord['notes'];
 
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
             // flip the IP
-            $iprev = ip_mangle($interface['ip_addr'],'flip');
+            $iprev = ip_mangle($dnsrecord['ip_addr'],'flip');
 
-            $arpatype = (strpos($interface['ip_addr_text'],':') ? 'ip6' : 'in-addr');
+            $arpatype = (strpos($dnsrecord['ip_addr_text'],':') ? 'ip6' : 'in-addr');
 
             //^fqdn:p:ttl:timestamp:lo  --- PTR record format
             $text .= sprintf("^%-{$datawidth}s%s\n" ,"{$iprev}.{$arpatype}.arpa:{$ptr['fqdn']}:{$dnsrecord['ttl']}:",$dnsrecord['notes']);
@@ -426,20 +395,10 @@ function process_domain($domainname='') {
         // Process SRV records
         // found some great examples of all this at: http://www.anders.com/projects/sysadmin/djbdnsRecordBuilder/buildRecord.txt
         if ($dnsrecord['type'] == 'SRV') {
-            // Find the interface record
-            list($status, $rows, $interface) = ona_get_interface_record(array('id' => $dnsrecord['interface_id']));
-            if ($status or !$rows) {
-                printmsg("ERROR => build_tinydns: Unable to find interface record for SRV record!",3);
-                $self['error'] = "ERROR => build_tinydns: Unable to find interface record for SRV record!";
-                continue;
-            }
-
             // Get the name info that the SRV points to
             list($status, $rows, $srv) = ona_get_dns_record(array('id' => $dnsrecord['dns_id']), '');
 
-            $fqdn = $dnsrecord['name'].$domain['fqdn'];
-
-            $tar = "";
+            $tar = '';
             $chunks = explode(".", $srv['name'].".".$srv['domain_fqdn']);
             foreach ($chunks as $chunk) {
               $tar = $tar . characterCount( $chunk ) . $chunk;
@@ -453,7 +412,7 @@ function process_domain($domainname='') {
 
     $text .= "# ---------------- END DOMAIN {$domain['name']} ---------\n";
 
-    // MP: FIXME.  need to figure out how to deal with PTR records that have no A record with them.. currently busted as a whole.
+    // MP: FIXME.  need to figure out how to deal with PTR records that have no A record with them.. currently busted as a whole.????
 
     // Return the zone file
     return(array(0, $text));
