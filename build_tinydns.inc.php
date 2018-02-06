@@ -174,12 +174,6 @@ TODO: MP: deal with creating SOA records properly for each zone as well.. need a
         }
 
         $text .= "#Server build done.\n";
-
-        // Turn $text into an array of lines and remove duplicates
-        // This is done so we dont get duplicate records like PTR records from reverse domains and hosts etc.
-        $text = explode("\n", $text);
-        $text = array_unique($text);
-        $text = implode("\n", $text);
     }
 
 
